@@ -10,13 +10,14 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from itertools import product
 import time
+from datetime import datetime
 
 start_time = time.time()
 
 pi = 3.1415926535897932
 
 # Parameters of the simulation
-phi = 0  # Angle of slope
+phi = 0.17  # Angle of slope
 mu = 0.6  # Coefficient of friction
 theta_iPhase = 0  # Initial theta
 theta_fPhase = pi * 2  # Final theta
@@ -94,7 +95,7 @@ def F_N_Phase(x, eta, gamma_variable):
     )
 
 
-def x_parallel(phi, nu, eta_0, mu):
+def x_parallel(phi, nu, eta_0, mu, N):
 
     # Import constants
     gamma = 1 / (1 + nu)
@@ -102,7 +103,6 @@ def x_parallel(phi, nu, eta_0, mu):
     k_g = 1 - gamma**2  # moment of inertia about centre of gravity
     theta_i = 0  # Initial theta
     theta_f = 2 * pi  # Final theta
-    N = 1000  # Number of divisions.
     theta = linspace(theta_i, theta_f, num=N)
     crit_velocity = 1 / gamma * cos(phi)
 
@@ -502,10 +502,24 @@ Region_II_mass = []
 Region_II_vel = []
 Region_IV_mass = []
 Region_IV_vel = []
-n = 50
-m = 600
-mass_ratio = linspace(0.005, 1, n)
-initial_velocity = linspace(0.000465, 2, m)
+n = 10  # Mass divisions
+m = 20  # Velocity divisions
+N = 30000  # Angle divisions
+n_III = n
+m_III = m
+mass_ratio = linspace(0.06, 0.15, n)
+initial_velocity = linspace(0.000000000000001, 0.3, m)
+for i in range(n):
+    for j in range(m):
+        eta = initial_velocity[j]
+        gamma = (mass_ratio[i] + 1) ** (-1)
+        if (
+            abs(max(F_N_Phase(thetaPhase, eta, gamma))) >= mu
+            or abs(min(F_N_Phase(thetaPhase, eta, gamma))) >= mu
+        ):
+            Region_II_mass.append(mass_ratio[i])
+            Region_II_vel.append(eta)
+            break
 
 
 def crit_velocity(mass_ratio):
@@ -518,13 +532,11 @@ Region_IV_vel = crit_velocity(mass_ratio)
 
 def simulate_parallel(params):
     mass_ratio, initial_velocity = params
-    a, b = x_parallel(phi, mass_ratio, initial_velocity, mu)
+    a, b = x_parallel(phi, mass_ratio, initial_velocity, mu, N)
     return a, b
 
 
 if __name__ == "__main__":
-    mass_ratio_III = linspace(0.005, 1, n)
-    initial_velocity_III = linspace(0.000465, 2, m)
 
     # Use multiprocessing Pool for parallelization
     with multiprocessing.Pool() as pool:
@@ -544,6 +556,7 @@ if __name__ == "__main__":
             Region_III_vel.append(initial_velocity)
             found_for_ratio.add(mass_ratio)
 
+
 # Record the end time
 end_time = time.time()
 
@@ -552,9 +565,40 @@ runtime = end_time - start_time
 
 print(f"Runtime: {runtime} seconds")
 
+# Open a file for writing
+with open("III.0.6.0.17.txt", "a") as file:
+    file.write("X Divisions: " + str(n_III) + "\n")
+    file.write("Y Divisions: " + str(m_III) + "\n")
+    file.write("Angle Divisions: " + str(N) + "\n")
+    for i in range(n):
+        file.write(str(Region_III_mass[i]) + "," + str(Region_III_vel[i]) + "\n")
+    file.write("\n")
+file.close()
+
+print(Region_IV_mass)
+print(Region_IV_vel)
+print(Region_II_mass)
+print(Region_II_vel)
+print(Region_III_mass)
+print(Region_III_vel)
 plt.plot(Region_II_mass, Region_II_vel)
 plt.plot(Region_IV_mass, Region_IV_vel)
 plt.plot(Region_III_mass, Region_III_vel)
 plt.ylim(0, 2)
 plt.xlim(0, 1)
+current_time = datetime.now()
+plotname = (
+    str(n_III)
+    + " "
+    + str(m_III)
+    + " "
+    + str(N)
+    + " "
+    + str(mu)
+    + " "
+    + str(phi)
+    + str(current_time)
+    + ".png"
+)
+# plt.savefig(plotname, format="png")
 plt.show()
