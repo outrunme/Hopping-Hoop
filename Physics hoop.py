@@ -12,8 +12,8 @@ pi = 3.1415926535897932
 
 # Parameters of the simulation
 phi = 0  # Angle of slope
-nu = 0.25  # Mass ratio
-eta_0 = 0.05  # Initial eta
+nu = 0.3  # Mass ratio
+eta_0 = 0.5  # Initial eta
 mu = 0.6  # Coefficient of friction
 
 # Import constants
@@ -208,15 +208,6 @@ def S_spin(x):
     return gamma * sin(x) - mu * (1 + gamma * cos(x))
 
 
-def dn_dx_spin(x, eta):
-    return (
-        2
-        * (gamma * sin(x) - mu * (1 + gamma * cos(x)))
-        * (cos(phi) - gamma * eta * cos(x))
-        / (k_g + (gamma * sin(x) - mu * (1 + gamma * cos(x))) * gamma * sin(x))
-    )
-
-
 def zeta_spin(x, eta):
     return (
         (gamma * sin(x) - mu * (1 + gamma * cos(x)))
@@ -243,13 +234,20 @@ def F_spin(N):
     return mu * N
 
 
-def dXi_dt_spin(x, Xi, solution_y):
-    func = solution_y.y[0, np.argmin(np.abs(solution_y.t - x))]
-    return (
+def derivatives_spin(x, z):
+    eta, Xi = z
+    dndx = (
+        2
+        * (gamma * sin(x) - mu * (1 + gamma * cos(x)))
+        * (cos(phi) - gamma * eta * cos(x))
+        / (k_g + (gamma * sin(x) - mu * (1 + gamma * cos(x))) * gamma * sin(x))
+    )
+    dXidx = (
         sin(phi)
-        - gamma * (zeta_spin(x, func) * cos(x) - func * sin(x))
-        - mu * N_spin(x, func)
-    ) / sqrt(np.abs((func)))
+        - gamma * (zeta_spin(x, eta) * cos(x) - eta * sin(x))
+        - mu * N_spin(x, eta)
+    ) / sqrt(np.abs((eta)))
+    return dndx, dXidx
 
 
 # Skidding
@@ -265,10 +263,6 @@ def zeta_skid(x, eta):
         * (cos(phi) - gamma * eta * cos(x))
         / (k_g + (gamma * sin(x) + mu * (1 + gamma * cos(x))) * gamma * sin(x))
     )
-
-
-def dn_dx_skid(x, eta):
-    return 2 * zeta_skid(x, eta)
 
 
 def N_skid(x, eta):
@@ -289,23 +283,22 @@ def F_skid(N):
     return -mu * N
 
 
-def eta(x, func, theta_start, theta_end, thetaRange, eta_i):
-    solskid = solve_ivp(
-        func,
-        (theta_start, theta_end),
-        np.array([eta_i]),
-        t_eval=thetaRange,
+def derivatives_skid(x, z):
+    eta, Xi, E = z
+    dndx = 2 * (
+        (
+            (gamma * sin(x) + mu * (1 + gamma * cos(x)))
+            * (cos(phi) - gamma * eta * cos(x))
+            / (k_g + (gamma * sin(x) + mu * (1 + gamma * cos(x))) * gamma * sin(x))
+        )
     )
-    return solskid
-
-
-def dXi_dt_skid(x, Xi, solution_y):
-    func = solution_y.y[0, np.argmin(np.abs(solution_y.t - x))]
-    return (
+    dXidx = (
         sin(phi)
-        - gamma * (zeta_skid(x, func) * cos(x) - func * sin(x))
-        - mu * N_skid(x, func)
-    ) / sqrt(np.abs((func)))
+        - gamma * (zeta_skid(x, eta) * cos(x) - eta * sin(x))
+        - mu * N_skid(x, eta)
+    ) / sqrt(np.abs((eta)))
+    dEdx = np.abs(mu * N_skid(x, eta) * Xi / (sqrt(np.abs(eta))))
+    return dndx, dXidx, dEdx
 
 
 def energy_lost(x, E, force, solution_eta, solution_velocity):
@@ -359,20 +352,17 @@ for i in range(1, N):
                 skid = True
                 roll = False
                 spin = False
-                etaNew = eta_final[i - 1]
                 thetaNew = theta[i:]
-                solskid = eta(
-                    thetaNew[0], dn_dx_skid, theta[i - 1], theta_f, thetaNew, etaNew
-                )
-                Xi_initial = np.array([Xi_final[i - 1]])
-                solvel_skid = solve_ivp(
-                    lambda x, Xi: dXi_dt_skid(x, Xi, solskid),
+                initial_values = np.array([eta_final[i - 1], Xi_final[i - 1], 0])
+                solution_skid = solve_ivp(
+                    derivatives_skid,
                     (theta[i - 1], theta_f),
-                    Xi_initial,
+                    initial_values,
+                    method="Radau",
                     t_eval=thetaNew,
                 )
-                eta_final[i] = solskid.y[0, 0]
-                Xi_final[i] = solvel_skid.y[0, 0]
+                eta_final[i] = solution_skid.y[0, 0]
+                Xi_final[i] = solution_skid.y[1, 0]
                 root_eta[i] = sqrt(eta_final[i])
                 zeta_final[i] = zeta_skid(thetaNew[0], eta_final[i])
                 N_final[i] = N_skid(thetaNew[0], eta_final[i])
@@ -382,8 +372,8 @@ for i in range(1, N):
                 roll = False
                 spin = False
                 sk = sk + 1
-                eta_final[i] = solskid.y[0, sk]
-                Xi_final[i] = solvel_skid.y[0, sk]
+                eta_final[i] = solution_skid.y[0, sk]
+                Xi_final[i] = solution_skid.y[1, sk]
                 if eta_final[i] < 0:
                     print("Roll back")
                     break
@@ -406,20 +396,17 @@ for i in range(1, N):
                 spin = True
                 roll = False
                 skid = False
-                etaNew = eta_final[i - 1]
                 thetaNew = theta[i:]
-                solspin = eta(
-                    thetaNew[0], dn_dx_spin, theta[i - 1], theta_f, thetaNew, etaNew
-                )
-                Xi_initial = np.array([Xi_final[i - 1]])
-                solvel_spin = solve_ivp(
-                    lambda x, Xi: dXi_dt_spin(x, Xi, solspin),
+                initial_values = np.array([eta_final[i - 1], Xi_final[i - 1]])
+                solution_spin = solve_ivp(
+                    derivatives_spin,
                     (theta[i - 1], theta_f),
-                    Xi_initial,
+                    initial_values,
+                    method="Radau",
                     t_eval=thetaNew,
                 )
-                eta_final[i] = solspin.y[0, 0]
-                Xi_final[i] = solvel_spin.y[0, 0]
+                eta_final[i] = solution_spin.y[0, 0]
+                Xi_final[i] = solution_spin.y[1, 0]
                 root_eta[i] = sqrt(eta_final[i])
                 zeta_final[i] = zeta_spin(thetaNew[0], eta_final[i])
                 N_final[i] = N_spin(thetaNew[0], eta_final[i])
@@ -429,8 +416,8 @@ for i in range(1, N):
                 roll = False
                 skid = False
                 sp = sp + 1
-                eta_final[i] = solspin.y[0, sp]
-                Xi_final[i] = solvel_spin.y[0, sp]
+                eta_final[i] = solution_spin.y[0, sp]
+                Xi_final[i] = solution_spin.y[1, sp]
                 if eta_final[i] < 0:
                     print("Roll back")
                     break
@@ -480,8 +467,10 @@ for i in range(1, N):
 # plt.plot(theta, root_eta, label="root eta")
 plt.plot(theta, eta_final, label="eta")
 plt.plot(theta, N_final, label="N")
-# plt.plot(theta, F_N_final, label="F/N")
-# plt.plot(theta, Xi_final, label="Velocity")
+plt.plot(theta, F_final)
+plt.plot(theta, F_N_final, label="F/N")
+plt.plot(theta, Xi_final, label="Velocity")
 # plt.plot(theta, zeta_final, label="zeta")
+plt.plot(solution_skid.t, solution_skid.y[2])
 plt.legend(loc="upper left")
 plt.show()

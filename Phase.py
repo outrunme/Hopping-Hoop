@@ -16,7 +16,7 @@ start_time = time.time()
 pi = 3.1415926535897932
 
 # Parameters of the simulation
-phi = 0  # Angle of slope
+phi = 0.00  # Angle of slope
 mu = 0.6  # Coefficient of friction
 theta_iPhase = 0  # Initial theta
 theta_fPhase = pi * 2  # Final theta
@@ -329,14 +329,6 @@ def x_parallel(phi, nu, eta_0, mu, N):
 
     # Spinning
 
-    def dn_dx_spin(x, eta):
-        return (
-            2
-            * (gamma * sin(x) - mu * (1 + gamma * cos(x)))
-            * (cos(phi) - gamma * eta * cos(x))
-            / (k_g + (gamma * sin(x) - mu * (1 + gamma * cos(x))) * gamma * sin(x))
-        )
-
     def zeta_spin(x, eta):
         return (
             (gamma * sin(x) - mu * (1 + gamma * cos(x)))
@@ -360,16 +352,21 @@ def x_parallel(phi, nu, eta_0, mu, N):
             + cos(x) * eta
         )
 
-    def F_spin(x, eta):
-        return mu * N_spin(x, eta)
-
-    def dXi_dt_spin(x, Xi, solution_y):
-        func = solution_y.y[0, np.argmin(np.abs(solution_y.t - x))]
-        return (
+    def derivatives_spin(x, z):
+        eta, Xi, E = z
+        dndx = (
+            2
+            * (gamma * sin(x) - mu * (1 + gamma * cos(x)))
+            * (cos(phi) - gamma * eta * cos(x))
+            / (k_g + (gamma * sin(x) - mu * (1 + gamma * cos(x))) * gamma * sin(x))
+        )
+        dXidx = (
             sin(phi)
-            - gamma * (zeta_spin(x, func) * cos(x) - func * sin(x))
-            - mu * N_spin(x, func)
-        ) / sqrt(np.abs((func)))
+            - gamma * (zeta_spin(x, eta) * cos(x) - eta * sin(x))
+            - mu * N_spin(x, eta)
+        ) / sqrt(np.abs((eta)))
+        dEdx = np.abs(mu * N_spin(x, eta) * Xi / (sqrt(np.abs((eta)))))
+        return dndx, dXidx, dEdx
 
     # Skidding
 
@@ -381,19 +378,6 @@ def x_parallel(phi, nu, eta_0, mu, N):
                 k_g
                 + (gamma * sin(x) + mu * (1 + gamma * cos(x))) * gamma * sin(x)
                 + 0.000000000001
-            )
-        )
-
-    def dn_dx_skid(x, eta):
-        return 2 * (
-            (
-                (gamma * sin(x) + mu * (1 + gamma * cos(x)))
-                * (cos(phi) - gamma * eta * cos(x))
-                / (
-                    k_g
-                    + (gamma * sin(x) + mu * (1 + gamma * cos(x))) * gamma * sin(x)
-                    + 0.000000000001
-                )
             )
         )
 
@@ -414,32 +398,25 @@ def x_parallel(phi, nu, eta_0, mu, N):
             + eta * cos(x)
         )
 
-    def F_skid(x, eta):
-        return mu * N_skid(x, eta)
-
-    def eta(x, func, theta_start, theta_end, thetaRange, eta_i):
-        solskid = solve_ivp(
-            func,
-            (theta_start, theta_end),
-            np.array([eta_i]),
-            t_eval=thetaRange,
+    def derivatives_skid(x, z):
+        eta, Xi, E = z
+        dndx = 2 * (
+            (
+                (gamma * sin(x) + mu * (1 + gamma * cos(x)))
+                * (cos(phi) - gamma * eta * cos(x))
+                / (k_g + (gamma * sin(x) + mu * (1 + gamma * cos(x))) * gamma * sin(x))
+            )
         )
-        return solskid
-
-    def dXi_dt_skid(x, Xi, solution_y):
-        func = solution_y.y[0, np.argmin(np.abs(solution_y.t - x))]
-        return (
+        dXidx = (
             sin(phi)
-            - gamma * (zeta_skid(x, func) * cos(x) - func * sin(x))
-            - mu * N_skid(x, func)
-        ) / sqrt(np.abs((func)))
+            - gamma * (zeta_skid(x, eta) * cos(x) - eta * sin(x))
+            - mu * N_skid(x, eta)
+        ) / sqrt(np.abs(eta))
+        dEdx = np.abs(mu * N_skid(x, eta) * Xi / (sqrt(np.abs(eta))))
+        return dndx, dXidx, dEdx
 
-    def energy_lost(x, E, force, solution_eta, solution_velocity):
-        eta = solution_eta.y[0, np.argmin(np.abs(solution_eta.t - x))]
-        velocity = solution_velocity.y[0, np.argmin(np.abs(solution_velocity.t - x))]
-        dEdx = force(x, eta) * velocity / (sqrt(np.abs((eta))))
-        return dEdx
-
+    dimensionless_energy = 0.5 * eta_0 * (2 + 3 * gamma + gamma**2)
+    # print(dimensionless_energy)
     eta_final = np.zeros(N)
     F_final = np.zeros(N)
     N_final = np.zeros(N)
@@ -481,32 +458,21 @@ def x_parallel(phi, nu, eta_0, mu, N):
                     skid = True
                     roll = False
                     spin = False
-                    etaNew = eta_final[i - 1]
                     thetaNew = theta[i:]
-                    solskid = eta(
-                        thetaNew[0],
-                        dn_dx_skid,
-                        theta[i - 1],
-                        theta_f,
-                        thetaNew,
-                        etaNew,
+                    initial_values = np.array(
+                        [eta_final[i - 1], Xi_final[i - 1], friction_heat]
                     )
-                    Xi_initial = np.array([Xi_final[i - 1]])
-                    solvel_skid = solve_ivp(
-                        lambda x, Xi: dXi_dt_skid(x, Xi, solskid),
+                    solution_skid = solve_ivp(
+                        derivatives_skid,
                         (theta[i - 1], theta_f),
-                        Xi_initial,
+                        initial_values,
+                        method="Radau",
                         t_eval=thetaNew,
                     )
-                    solenergy_skid = solve_ivp(
-                        lambda x, E: energy_lost(x, E, F_skid, solskid, solvel_skid),
-                        (theta[i - 1], theta_f),
-                        np.array([friction_heat]),
-                        t_eval=thetaNew,
-                    )
+                    # print(solution_skid.y[2])
                     # print(friction_heat)
-                    Xi_final[i] = solvel_skid.y[0, 0]
-                    eta_final[i] = solskid.y[0, 0]
+                    eta_final[i] = solution_skid.y[0, 0]
+                    Xi_final[i] = solution_skid.y[1, 0]
                     root_eta[i] = sqrt(eta_final[i])
                     N_final[i] = N_skid(thetaNew[0], eta_final[i])
                     F_final[i] = -mu * N_final[i]
@@ -515,17 +481,19 @@ def x_parallel(phi, nu, eta_0, mu, N):
                     roll = False
                     spin = False
                     sk = sk + 1
-                    eta_final[i] = solskid.y[0, sk]
-                    Xi_final[i] = solvel_skid.y[0, sk]
+                    eta_final[i] = solution_skid.y[0, sk]
+                    Xi_final[i] = solution_skid.y[1, sk]
                     # print(eta_0 / 2)
                     # print("a")
                     # print(solenergy_skid.y[0, sk])
                     # print(solenergy_skid.y[0])
-                    if solenergy_skid.y[0, sk] > eta_0:
-                        indicator1 = 1
+                    # print(solution_skid.y[2, sk])
                     if eta_final[i] < 0:
-                        # indicator1 = 1
+                        indicator1 = 1
                         break
+                    if solution_skid.y[2, sk] > dimensionless_energy:
+                        # indicator1 = 0
+                        pass
                     root_eta[i] = sqrt(eta_final[i])
                     N_final[i] = N_skid(thetaNew[sk], eta_final[i])
                     F_final[i] = -mu * N_final[i]
@@ -535,7 +503,7 @@ def x_parallel(phi, nu, eta_0, mu, N):
                         roll = False
                         spin = False
                         F_N_final[i] = -mu + 0.000000000000001
-                        friction_heat = friction_heat + solenergy_skid.y[0, sk]
+                        friction_heat = friction_heat + solution_skid.y[2, sk]
                         # print("b")
             # Spin
             elif F_final[i - 1] > 0:
@@ -546,33 +514,21 @@ def x_parallel(phi, nu, eta_0, mu, N):
                     spin = True
                     roll = False
                     skid = False
-                    etaNew = eta_final[i - 1]
                     thetaNew = theta[i:]
-                    solspin = eta(
-                        thetaNew[0],
-                        dn_dx_spin,
-                        theta[i - 1],
-                        theta_f,
-                        thetaNew,
-                        etaNew,
+                    initial_values = np.array(
+                        [eta_final[i - 1], Xi_final[i - 1], friction_heat]
                     )
-                    eta_final[i] = solspin.y[0, 0]
-                    Xi_initial = np.array([Xi_final[i - 1]])
-                    solvel_spin = solve_ivp(
-                        lambda x, Xi: dXi_dt_spin(x, Xi, solspin),
+                    solution_spin = solve_ivp(
+                        derivatives_spin,
                         (theta[i - 1], theta_f),
-                        Xi_initial,
-                        t_eval=thetaNew,
-                    )
-                    solenergy_spin = solve_ivp(
-                        lambda x, E: energy_lost(x, E, F_spin, solspin, solvel_spin),
-                        (theta[i - 1], theta_f),
-                        np.array([friction_heat]),
+                        initial_values,
+                        method="Radau",
                         t_eval=thetaNew,
                     )
                     # print(solenergy_spin.y[0])
                     # print(friction_heat)
-                    Xi_final[i] = solvel_spin.y[0, 0]
+                    eta_final[i] = solution_spin.y[0, 0]
+                    Xi_final[i] = solution_spin.y[1, 0]
                     root_eta[i] = sqrt(eta_final[i])
                     N_final[i] = N_spin(thetaNew[0], eta_final[i])
                     F_final[i] = mu * N_final[i]
@@ -581,17 +537,17 @@ def x_parallel(phi, nu, eta_0, mu, N):
                     roll = False
                     skid = False
                     sp = sp + 1
-                    eta_final[i] = solspin.y[0, sp]
-                    Xi_final[i] = solvel_spin.y[0, sp]
+                    eta_final[i] = solution_spin.y[0, sp]
+                    Xi_final[i] = solution_spin.y[1, sp]
                     # print(eta_0 / 2)
                     # print("b")
                     # print(solenergy_spin.y[0, sp])
-                    if solenergy_spin.y[0, sp] > eta_0:
-                        indicator1 = 1
-                        # pass
                     if eta_final[i] < 0:
-                        # indicator1 = 1
+                        indicator1 = 1
                         break
+                    if solution_spin.y[2, sp] > dimensionless_energy:
+                        # indicator1 = 0
+                        pass
                     root_eta[i] = sqrt(eta_final[i])
                     N_final[i] = N_spin(thetaNew[sp], eta_final[i])
                     F_final[i] = mu * N_final[i]
@@ -601,7 +557,7 @@ def x_parallel(phi, nu, eta_0, mu, N):
                         roll = False
                         spin = False
                         F_N_final[i] = mu - 0.0000000000001
-                        friction_heat = friction_heat + solenergy_spin.y[0, sp]
+                        friction_heat = friction_heat + solution_spin.y[2, sp]
                         # print("a")
         else:
             if roll == False:
@@ -672,10 +628,10 @@ def calculate_hopping_boundary(x_pts, vel_resolution, angular_resolution, i):
 
 if __name__ == "__main__":
 
-    n = 150  # Mass resolution
-    m = 15  # Velocity resolution 2^m
-    N = 3600  # Angular resolution
-    mass_ratio = linspace(0.0000000006, 0.5, n)
+    n = 20  # Mass resolution
+    m = 20  # Velocity resolution 2^m
+    N = 10000  # Angular resolution
+    mass_ratio = linspace(0.0000000006, 0.2, n)
 
     # Using Pool for managing processes
     with Pool() as pool:
@@ -699,7 +655,7 @@ runtime = end_time - start_time
 
 print(f"Runtime: {runtime} seconds")
 
-# plt.plot(*zip(*slipping_results))
+plt.plot(*zip(*slipping_results))
 plt.plot([0, 1], [crit_velocity(0), crit_velocity(1)])
 plt.plot(plot_pts[0], plot_pts[1])
 plt.plot(plot_pts[0], plot_pts[2])
